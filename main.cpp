@@ -246,7 +246,7 @@ bool LoadSparseMatrix(const std::string& filepath, std::vector<SeMat3f>& diagona
 
 bool LoadAndConvertSparseMatrix(const std::string& filepath, std::vector<SeMat3f>& diagonals, std::vector<SeMat3f>& csrOffDiagonals, std::vector<int>& csrOffColIdx, std::vector<int>& csrRanges)
 {
-	printf("Loading Matrix...");
+	printf("Loading Matrix...\n");
 
 	Eigen::SparseMatrix<double> lower_A_csc;
 
@@ -396,7 +396,7 @@ bool LoadAndConvertSparseMatrix(const std::string& filepath, std::vector<SeMat3f
 
 bool LoadRhs(const std::string& filepath, std::vector<SeVec3f>& rhs)
 {
-	printf("Loading Rhs...");
+	printf("Loading Rhs...\n");
 
 	rhs.clear(); rhs.reserve(1024);
 
@@ -436,7 +436,7 @@ bool LoadRhs(const std::string& filepath, std::vector<SeVec3f>& rhs)
 
 bool LoadRhs2(const std::string& filepath, std::vector<SeVec3f>& rhs)
 {
-	printf("Loading Rhs...");
+	printf("Loading Rhs...\n");
 
 	rhs.clear(); rhs.reserve(1024);
 
@@ -486,6 +486,39 @@ bool LoadRhs2(const std::string& filepath, std::vector<SeVec3f>& rhs)
 	}
 
 	printf("Total Vertex Number: %d\n", vertNumber);
+
+	file.close();
+
+	return true;
+}
+
+
+bool LoadEigenRHS(const std::string& filepath, Eigen::VectorXd& rhs)
+{
+	printf("Loading Eigen Rhs...\n");
+
+	std::string line, prefix;
+
+	std::ifstream file(filepath);
+
+	int vertNumber = 0;
+
+	if (!file.is_open())
+		return false;
+
+	int cnt = 0;
+	while (std::getline(file, line))
+	{
+		std::istringstream iss_x(line);
+
+		if (!(iss_x >> rhs[cnt])) {
+			std::cerr << "Error reading x-coordinate at line " << cnt << std::endl;
+			continue;
+		}
+		cnt++;
+	}
+
+	printf("Total Vertex Number: %d\n", cnt / 3);
 
 	file.close();
 
@@ -641,6 +674,34 @@ int main(int argc, char** argv)
 	std::vector<SeVec3f> x;   x.resize(vertNumber);	  Utility::MemsetZero(x);
 
 	linearCG->Solve(x.data(), rhs.data(), vertNumber, maxIter, tolerance, useTolerance);
+
+
+	//Jacobi Preconditioner
+	printf("Loading Matrix...\n");
+
+	Eigen::SparseMatrix<double> lower_A_csc;
+	if (!Eigen::loadMarket(lower_A_csc, hessian_address)) {
+		std::cerr << "File " << hessian_address << " is not found" << std::endl;
+	}
+	Eigen::VectorXd eigen_rhs(lower_A_csc.rows());
+	LoadEigenRHS(base + rhs_name, eigen_rhs);
+	Eigen::VectorXd eigen_x;
+
+	Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::DiagonalPreconditioner<double> > solver;
+	solver.setMaxIterations(256);
+	solver.setTolerance(1e-10f);
+	solver.compute(lower_A_csc);
+	if (solver.info() != Eigen::Success) {
+		std::cerr << "Decomposition failed" << std::endl;
+		return 0;
+	}
+	eigen_x = solver.solve(eigen_rhs);
+
+	// Solve Quality
+	Eigen::VectorXd res =
+		(eigen_rhs - lower_A_csc.selfadjointView<Eigen::Lower>() * eigen_x);
+	double residual = res.norm();
+	std::cout << "Jacobi Preconditioner Norm residual is: " << residual << std::endl;
 
 	return 0;
 }
